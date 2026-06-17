@@ -1,0 +1,5 @@
+__pycache__/
+*.py[cod]
+.pixi/
+pixi.lock
+.DS_Store
