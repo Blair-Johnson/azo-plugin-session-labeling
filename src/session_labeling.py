@@ -7,6 +7,7 @@ users can recognize sessions while browsing or resuming work.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
 
 from agent_utils import Feature, tool
@@ -91,9 +92,40 @@ def _current_session_id(state: Any) -> str:
     return str(getattr(state, "_session_id", "") or "").strip()
 
 
-def _project_for_session(session_id: str) -> tuple[str | None, str | None]:
+def _project_from_state(state: Any) -> str:
+    """Best-effort project name for the currently running session.
+
+    In the live TUI backend, a brand-new session id exists before the session
+    index row is written. The active RunDB still points at the project DB, so
+    prefer runtime state over scanning registered sessions.
+    """
+
+    if state is None:
+        return ""
+
+    for attr in ("_project_name", "project_name"):
+        value = str(getattr(state, attr, "") or "").strip()
+        if value:
+            return value
+
+    run_db = getattr(state, "run_db", None)
+    agent_db = getattr(run_db, "agent_db", None)
+    db_path = str(getattr(agent_db, "path", "") or "").strip()
+    if db_path:
+        path = Path(db_path).expanduser()
+        if path.name == "db.sqlite" and path.parent.name:
+            return path.parent.name
+
+    return ""
+
+
+def _project_for_session(session_id: str, state: Any = None) -> tuple[str | None, str | None]:
     if not session_id:
         return None, "ERROR: Could not determine the current session id."
+
+    runtime_project = _project_from_state(state)
+    if runtime_project:
+        return runtime_project, None
 
     matches: list[str] = []
     for project in list_projects():
@@ -118,9 +150,9 @@ def _project_for_session(session_id: str) -> tuple[str | None, str | None]:
         )
     return (
         None,
-        "ERROR: Could not find the current session in the project registry. "
-        "The session may not have been registered yet; try again after the first saved turn "
-        "or use /session name manually.",
+        "ERROR: Could not determine the current project for this session. "
+        "The session id is available, but no runtime project metadata or project DB path "
+        "was found. Use /session name manually for this unusual case.",
     )
 
 
@@ -175,7 +207,7 @@ def name_session(
         messages.append(f"Session description set to: {desc}")
 
     sid = _current_session_id(state)
-    project, error = _project_for_session(sid)
+    project, error = _project_for_session(sid, state)
     if error:
         return error
 
