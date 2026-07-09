@@ -8,4 +8,4 @@ python = ">=3.11"
 
 [tool.agent-zoo.plugin]
 name = "azo-plugin-session-labeling"
-orchestrator = ["src/session_labeling.py"]
+default = ["src/session_labeling.py"]

@@ -13,7 +13,7 @@ from typing import Any
 from agent_utils import Feature, tool
 from agent_utils.components import ExcludeForgotten, MessageRenderer
 
-from agents.orchestrated.projects import list_projects, list_sessions, register_session
+from agent_zoo.projects import list_projects, list_sessions, register_session
 
 
 _TITLE_MAX_CHARS = 80
