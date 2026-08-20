@@ -10,8 +10,39 @@ import re
 from pathlib import Path
 from typing import Any
 
-from agent_utils import Feature, tool
-from agent_utils.components import ExcludeForgotten, MessageRenderer
+_PLUGIN_NAME = "azo-plugin-session-labeling"
+_AGENT_UTILS_MIN_VERSION = "0.3.0"
+
+
+class _PluginCompatibilityError(RuntimeError):
+    agent_zoo_plugin_compatibility = True
+
+
+try:
+    from agent_utils import Feature, RENDER_CHANNEL_API_VERSION, tool
+    from agent_utils.components import (
+        ExcludeForgotten,
+        MessageRenderer,
+        RenderTransformRegistrar,
+    )
+    from agent_utils.types import Entry, MODEL_RENDER_CHANNEL
+except (ImportError, AttributeError) as exc:
+    raise _PluginCompatibilityError(
+        f"{_PLUGIN_NAME} requires agent-utils>={_AGENT_UTILS_MIN_VERSION} with "
+        "RenderTransformRegistrar, MODEL_RENDER_CHANNEL, and "
+        "Entry.register_render_transform; upgrade agent-utils before reloading."
+    ) from exc
+
+if (
+    RENDER_CHANNEL_API_VERSION != _AGENT_UTILS_MIN_VERSION
+    or MODEL_RENDER_CHANNEL != "model"
+    or not hasattr(Entry, "register_render_transform")
+):
+    raise _PluginCompatibilityError(
+        f"{_PLUGIN_NAME} requires agent-utils>={_AGENT_UTILS_MIN_VERSION} with "
+        "RenderTransformRegistrar, MODEL_RENDER_CHANNEL, and "
+        "Entry.register_render_transform; upgrade agent-utils before reloading."
+    )
 
 from agent_zoo.projects import list_projects, list_sessions, register_session
 
@@ -220,34 +251,37 @@ def name_session(
     return "; ".join(messages)
 
 
-class SessionLabelingPromptInstructions:
-    """Append concise session-labeling behavior guidance to the system prompt."""
+class SessionLabelingPromptInstructions(RenderTransformRegistrar):
+    """Append session-labeling guidance to the system prompt's model channel."""
 
     reads = {"entries"}
     writes = {"entries"}
 
-    def __init__(self):
-        self._base_fn = None
+    @staticmethod
+    def _make_transform(entry):
+        def transform(messages, state, *, _entry=entry):
+            if not messages or _entry.role != "system":
+                return messages
+            first = dict(messages[0])
+            if first.get("role") != "system":
+                return messages
+            content = str(first.get("content") or "")
+            if "# Session labeling" in content:
+                return messages
+            first["content"] = content + _SYSTEM_PROMPT_BLOCK
+            return [first, *messages[1:]]
+
+        return transform
 
     def __call__(self, state):
         if not getattr(state, "entries", None):
             return state
         entry = state.entries[0]
-        if self._base_fn is None:
-            self._base_fn = entry.render_fn or entry.render_default
-        base = self._base_fn
-
-        def render(state, _base=base):
-            messages = _base(state)
-            if not messages:
-                return messages
-            first = dict(messages[0])
-            content = str(first.get("content") or "")
-            if "# Session labeling" not in content:
-                first["content"] = content + _SYSTEM_PROMPT_BLOCK
-            return [first, *messages[1:]]
-
-        entry.render_fn = render
+        entry.register_render_transform(
+            MODEL_RENDER_CHANNEL,
+            self._make_transform(entry),
+            name="session-labeling system prompt",
+        )
         return state
 
 
