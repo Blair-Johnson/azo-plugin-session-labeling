@@ -42,10 +42,15 @@ def test_prompt_instructions_build_as_an_ordered_model_registrar():
     assert component_types.index(
         plugin.SessionLabelingPromptInstructions
     ) < component_types.index(ExcludeForgotten)
+    renderer_index = next(
+        index
+        for index, component in enumerate(session.pipeline)
+        if isinstance(component, MessageRenderer)
+    )
     assert (
         component_types.index(ExcludeForgotten)
         < component_types.index(RenderPlanFinalizer)
-        < component_types.index(MessageRenderer)
+        < renderer_index
     )
 
 
