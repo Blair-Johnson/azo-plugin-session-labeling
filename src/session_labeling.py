@@ -28,8 +28,8 @@ try:
     from agent_utils.core.state import Entry, MODEL_RENDER_CHANNEL, State
     from agent_utils.core.tool import Tool
     from agent_utils.features.core import (
-        ExcludeForgotten,
         MessageRenderer,
+        RenderPlanFinalizer,
         RenderTransformRegistrar,
     )
 except (ImportError, AttributeError) as exc:
@@ -285,7 +285,7 @@ def register_features(builder: Any, *, config: Any) -> None:
             ],
             order=[
                 SessionLabelingPromptInstructions,
-                ExcludeForgotten,
+                RenderPlanFinalizer,
                 MessageRenderer,
             ],
         )

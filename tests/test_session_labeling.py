@@ -8,7 +8,6 @@ from agent_utils.core.pipeline import PipelineBuilder
 from agent_utils.core.session import Session
 from agent_utils.core.state import MODEL_RENDER_CHANNEL
 from agent_utils.features.core import (
-    ExcludeForgotten,
     MessageRenderer,
     RenderPlanFinalizer,
     RenderPlanInitializer,
@@ -39,16 +38,13 @@ def test_prompt_instructions_build_as_an_ordered_model_registrar():
     assert component_types.index(RenderPlanInitializer) < component_types.index(
         plugin.SessionLabelingPromptInstructions
     )
-    assert component_types.index(
-        plugin.SessionLabelingPromptInstructions
-    ) < component_types.index(ExcludeForgotten)
     renderer_index = next(
         index
         for index, component in enumerate(session.pipeline)
         if isinstance(component, MessageRenderer)
     )
     assert (
-        component_types.index(ExcludeForgotten)
+        component_types.index(plugin.SessionLabelingPromptInstructions)
         < component_types.index(RenderPlanFinalizer)
         < renderer_index
     )
@@ -84,7 +80,6 @@ def test_repeated_preparation_rebuilds_without_accumulating_guidance():
     assert first == second
     assert entry.render_transform_names() == (
         "session-labeling system prompt",
-        "forgotten exclusion",
     )
     assert second[0]["content"].count("# Session labeling") == 1
 
