@@ -7,7 +7,7 @@ platforms = ["linux-64", "osx-arm64"]
 python = ">=3.11"
 
 [pypi-dependencies]
-agent-utils = ">=0.3.0"
+agent-utils = ">=0.4.0"
 
 [tool.agent-zoo.plugin]
 name = "azo-plugin-session-labeling"

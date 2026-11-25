@@ -111,112 +111,92 @@ def test_guidance_only_applies_to_a_system_prompt_entry():
     assert "# Session labeling" not in rendered[0]["content"]
 
 
-def test_name_session_registers_first_turn_session_from_run_db_path(tmp_path):
-    db_path = tmp_path / "projects" / "demo" / "db.sqlite"
-    state = SimpleNamespace(
-        run_db=SimpleNamespace(
-            session_id="session-1",
-            agent_db=SimpleNamespace(path=str(db_path)),
-        )
-    )
-    calls = []
+def test_name_session_updates_session_state_and_submits_checkpoint():
+    from agent_zoo.core.feature_state import ZooState, session_state
+    from agent_zoo.events import SaveCheckpoint
 
-    with patch.object(plugin, "list_projects", return_value=[]), patch.object(
-        plugin,
-        "register_session",
-        side_effect=lambda *args, **kwargs: calls.append((args, kwargs)),
-    ):
-        result = plugin.name_session.call(
-            state,
-            name="first_turn_label",
-            description="Initial investigation",
-        )
+    session = _build_session()
+    session.state = ZooState()
+    smeta = session_state(session.state)
+    smeta.session_id = "session-1"
+    smeta.instance_id = "inst-1"
+    smeta.project_name = "demo"
+
+    result = plugin.name_session.call(
+        session.state,
+        name="first_turn_label",
+        description="Initial investigation",
+    )
 
     assert result == (
         "Session name set to: first_turn_label; "
         "Session description set to: Initial investigation"
     )
-    assert calls == [
-        (
-            ("demo", "session-1"),
-            {"title": "first_turn_label", "description": "Initial investigation"},
-        )
-    ]
-    assert state._session_title == "first_turn_label"
-    assert state._session_description == "Initial investigation"
+    assert smeta.title == "first_turn_label"
+    assert smeta.description == "Initial investigation"
+    outbox = session.state.io.take_outbox()
+    save_reqs = [eff.request for eff in outbox if isinstance(eff.request, SaveCheckpoint)]
+    assert len(save_reqs) == 1
+    assert save_reqs[0].session_id == "session-1"
+    assert save_reqs[0].sync_catalog is True
 
 
 def test_name_session_tool_executes_through_pipeline():
+    from agent_zoo.core.feature_state import ZooState, session_state
+    from agent_zoo.events import SaveCheckpoint
+
     session = _build_session()
-    session.state._session_id = "sess-42"
-    session.state._project_name = "demo"
-    calls = []
+    session.state = ZooState()
+    session.ensure_initialized()
+    smeta = session_state(session.state)
+    smeta.session_id = "sess-42"
+    smeta.project_name = "demo"
 
-    with patch.object(
-        plugin,
-        "register_session",
-        side_effect=lambda *args, **kwargs: calls.append((args, kwargs)),
-    ):
-        session.step(
-            InputReceived(
-                {
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [
-                        {
-                            "id": "call-1",
-                            "type": "function",
-                            "function": {
-                                "name": "name_session",
-                                "arguments": '{"name": "bug_triage", "description": "Triaging event loop bug"}',
-                            },
-                        }
-                    ],
-                }
-            )
+    effects = session.step(
+        InputReceived(
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "name_session",
+                            "arguments": '{"name": "bug_triage", "description": "Triaging event loop bug"}',
+                        },
+                    }
+                ],
+            }
         )
+    )
 
-    assert calls == [
-        (
-            ("demo", "sess-42"),
-            {"title": "bug_triage", "description": "Triaging event loop bug"},
-        )
+    save_reqs = [
+        eff.request
+        for eff in effects
+        if isinstance(getattr(eff, "request", None), SaveCheckpoint)
     ]
-    assert session.state._session_title == "bug_triage"
-    assert session.state._session_description == "Triaging event loop bug"
+    assert len(save_reqs) == 1
+    assert save_reqs[0].session_id == "sess-42"
+    assert save_reqs[0].sync_catalog is True
+    assert smeta.title == "bug_triage"
+    assert smeta.description == "Triaging event loop bug"
     assert (
         session.state.entries[-1].messages[-1]["content"]
         == "Session name set to: bug_triage; Session description set to: Triaging event loop bug"
     )
 
 
-def test_project_for_session_falls_back_to_registered_session_index():
-    with patch.object(
-        plugin,
-        "list_projects",
-        return_value=[{"name": "alpha"}, {"name": "beta"}],
-    ), patch.object(
-        plugin,
-        "list_sessions",
-        side_effect=lambda project: (
-            [{"session_id": "target-session"}] if project == "beta" else []
-        ),
-    ):
-        project, error = plugin._project_for_session("target-session")
+def test_name_session_errors_without_session_id():
+    from agent_zoo.core.feature_state import ZooState
 
-    assert project == "beta"
-    assert error is None
-
-
-def test_project_for_session_errors_without_runtime_or_registered_project():
-    with patch.object(plugin, "list_projects", return_value=[]):
-        project, error = plugin._project_for_session("missing-session")
-
-    assert project is None
-    assert "Could not determine the current project" in error
+    result = plugin.name_session.call(ZooState(), name="bug_triage")
+    assert "Could not determine the current session id" in result
 
 
 def test_composes_onto_default_builder():
+    from agent_zoo.testing import assert_pipeline_sans_io
+
     session = Session()
     builder = build_default_builder(
         session,
@@ -230,3 +210,4 @@ def test_composes_onto_default_builder():
     assert any(
         isinstance(comp, plugin.SessionLabelingPromptInstructions) for comp in pipeline
     )
+    assert_pipeline_sans_io(pipeline)

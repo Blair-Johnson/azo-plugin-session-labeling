@@ -7,7 +7,6 @@ users can recognize sessions while browsing or resuming work.
 from __future__ import annotations
 
 import re
-from pathlib import Path
 from typing import Any
 
 _PLUGIN_NAME = "azo-plugin-session-labeling"
@@ -51,7 +50,9 @@ if (
         "Entry.append_render_transform; upgrade agent-utils before reloading."
     )
 
-from agent_zoo.storage.projects import list_projects, list_sessions, register_session
+from agent_zoo.core.feature_state import session_state
+from agent_zoo.events import SaveCheckpoint
+from agent_zoo.features.turn._helpers import build_checkpoint_document
 
 _TITLE_MAX_CHARS = 80
 _DESCRIPTION_MAX_CHARS = 240
@@ -123,87 +124,38 @@ def _validate_description(description: str) -> tuple[str | None, str | None]:
 
 
 def _current_session_id(state: Any) -> str:
-    run_db = getattr(state, "run_db", None)
-    sid = str(getattr(run_db, "session_id", "") or "").strip()
+    if state is None:
+        return ""
+    sid = str(session_state(state).session_id or "").strip()
     if sid:
         return sid
-    return str(getattr(state, "_session_id", "") or "").strip()
+    context = getattr(state, "_agent_zoo_context", None)
+    if isinstance(context, dict):
+        return str(context.get("session_id") or "").strip()
+    return ""
 
 
 def _project_from_state(state: Any) -> str:
-    """Best-effort project name for the currently running session."""
+    """Best-effort project name for the currently running session (pure Sans-I/O)."""
     if state is None:
         return ""
-
-    for attr in ("_project_name", "project_name"):
-        value = str(getattr(state, attr, "") or "").strip()
-        if value:
-            return value
-
+    proj = str(session_state(state).project_name or "").strip()
+    if proj:
+        return proj
     context = getattr(state, "_agent_zoo_context", None)
     if isinstance(context, dict):
         value = str(context.get("project_name") or "").strip()
         if value:
             return value
-
-    run_db = getattr(state, "run_db", None)
-    agent_db = getattr(run_db, "agent_db", None)
-    db_path = str(getattr(agent_db, "path", "") or "").strip()
-    if db_path:
-        path = Path(db_path).expanduser()
-        if path.name == "db.sqlite" and path.parent.name:
-            return path.parent.name
-
-    return ""
-
-
-def _project_for_session(
-    session_id: str, state: Any = None
-) -> tuple[str | None, str | None]:
-    if not session_id:
-        return None, "ERROR: Could not determine the current session id."
-
-    runtime_project = _project_from_state(state)
-    if runtime_project:
-        return runtime_project, None
-
-    matches: list[str] = []
-    for project in list_projects():
-        name = str(project.get("name", "") or "")
-        if not name:
-            continue
-        try:
-            sessions = list_sessions(name)
-        except Exception:
-            continue
-        if any(
-            str(entry.get("session_id", "") or "") == session_id for entry in sessions
-        ):
-            matches.append(name)
-
-    if len(matches) == 1:
-        return matches[0], None
-    if len(matches) > 1:
-        return (
-            None,
-            "ERROR: Current session id appears in multiple projects: "
-            + ", ".join(matches)
-            + ". Use the /session command manually for this unusual case.",
-        )
-    return (
-        None,
-        "ERROR: Could not determine the current project for this session. "
-        "The session id is available, but no runtime project metadata or project DB path "
-        "was found. Use /session name manually for this unusual case.",
-    )
+    return str(getattr(state, "project_name", "") or "").strip()
 
 
 class NameSession(Tool):
-    """Set the current session's name and/or description."""
+    """Set the current session's name and/or description (pure Sans-I/O)."""
 
     name = "name_session"
-    optional_reads = {"_session_id", "_project_name", "_agent_zoo_context", "run_db"}
-    writes = {"_session_title", "_session_description"}
+    optional_reads = {"features", "_agent_zoo_context"}
+    writes = {"features", "dirty"}
 
     def call(
         self,
@@ -252,16 +204,31 @@ class NameSession(Tool):
             messages.append(f"Session description set to: {desc}")
 
         sid = _current_session_id(state)
-        project, error = _project_for_session(sid, state)
-        if error:
-            return error
+        if not sid:
+            return "ERROR: Could not determine the current session id."
 
-        register_session(project, sid, **updates)
-        if state is not None:
-            if "title" in updates:
-                state._session_title = updates["title"]
-            if "description" in updates:
-                state._session_description = updates["description"]
+        smeta = session_state(state)
+        if not smeta.project_name:
+            proj = _project_from_state(state)
+            if proj:
+                smeta.project_name = proj
+        if "title" in updates:
+            smeta.title = updates["title"]
+        if "description" in updates:
+            smeta.description = updates["description"]
+        state.dirty = True
+
+        io_table = getattr(state, "io", None)
+        if io_table is not None:
+            io_table.submit(
+                SaveCheckpoint(
+                    session_id=sid,
+                    instance_id=str(smeta.instance_id or ""),
+                    document=build_checkpoint_document(state),
+                    sync_catalog=True,
+                ),
+                tag="session_labeling",
+            )
         return "; ".join(messages)
 
 
