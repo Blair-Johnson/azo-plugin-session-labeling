@@ -23,7 +23,7 @@ import session_labeling as plugin
 def _build_session(*, system_prompt: str = "Base system") -> Session:
     session = Session(system_prompt=system_prompt)
     builder = PipelineBuilder().add(core_feature())
-    plugin.register_features(builder, session=session, config={})
+    plugin.register_features(builder, config={})
     session.pipeline = builder.build(suppress_warnings=True)
     return session
 
@@ -204,7 +204,7 @@ def test_composes_onto_default_builder():
         include_plugins=False,
         include_llm_drivers=False,
     )
-    plugin.register_features(builder, session=session, config={})
+    plugin.register_features(builder, config={})
     pipeline = builder.build()
     assert any(isinstance(comp, plugin.NameSession) for comp in pipeline)
     assert any(

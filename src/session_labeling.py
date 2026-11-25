@@ -50,9 +50,12 @@ if (
         "Entry.append_render_transform; upgrade agent-utils before reloading."
     )
 
-from agent_zoo.core.feature_state import session_state
+from agent_zoo.durability import (
+    build_checkpoint_document,
+    session_context,
+    session_state,
+)
 from agent_zoo.events import SaveCheckpoint
-from agent_zoo.features.turn._helpers import build_checkpoint_document
 
 _TITLE_MAX_CHARS = 80
 _DESCRIPTION_MAX_CHARS = 240
@@ -126,35 +129,28 @@ def _validate_description(description: str) -> tuple[str | None, str | None]:
 def _current_session_id(state: Any) -> str:
     if state is None:
         return ""
-    sid = str(session_state(state).session_id or "").strip()
-    if sid:
-        return sid
-    context = getattr(state, "_agent_zoo_context", None)
-    if isinstance(context, dict):
-        return str(context.get("session_id") or "").strip()
-    return ""
+    return str(
+        session_state(state).session_id or session_context(state).session_id or ""
+    ).strip()
 
 
 def _project_from_state(state: Any) -> str:
     """Best-effort project name for the currently running session (pure Sans-I/O)."""
     if state is None:
         return ""
-    proj = str(session_state(state).project_name or "").strip()
-    if proj:
-        return proj
-    context = getattr(state, "_agent_zoo_context", None)
-    if isinstance(context, dict):
-        value = str(context.get("project_name") or "").strip()
-        if value:
-            return value
-    return str(getattr(state, "project_name", "") or "").strip()
+    return str(
+        session_state(state).project_name
+        or session_context(state).project_name
+        or getattr(state, "project_name", "")
+        or ""
+    ).strip()
 
 
 class NameSession(Tool):
     """Set the current session's name and/or description (pure Sans-I/O)."""
 
     name = "name_session"
-    optional_reads = {"features", "_agent_zoo_context"}
+    optional_reads = {"features"}
     writes = {"features", "dirty"}
 
     def call(
@@ -278,8 +274,8 @@ class SessionLabelingPromptInstructions(RenderTransformRegistrar):
         )
 
 
-def register_features(builder: Any, *, session: Any, config: Any) -> None:
-    del session, config
+def register_features(builder: Any, *, config: Any) -> None:
+    del config
     builder.add(
         Feature(
             name="session_labeling_addon",
